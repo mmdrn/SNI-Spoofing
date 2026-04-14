@@ -1,37 +1,36 @@
+import socket
 import sys
 from abc import ABC, abstractmethod
 
-from pydivert import WinDivert, Packet
-
-
-# from pydivert.consts import *
+from netfilterqueue import NetfilterQueue
+from scapy.layers.inet import IP, TCP
+from scapy.packet import Raw
 
 
 class TcpInjector(ABC):
-    def __init__(self, w_filter: str):
-        # self.interface_ipv4 = interface_ipv4
-        # self.interface_ipv6 = interface_ipv6
-        # ip_filter = ip4_filter = ip6_filter = ""
-        # if self.interface_ipv4:
-        #     ip4_filter = "(ip.SrcAddr == " + self.interface_ipv4 + " or ip.DstAddr == " + self.interface_ipv4 + ")"
-        #     ip_filter = ip4_filter
-        # if self.interface_ipv6:
-        #     ip6_filter = "(ipv6.SrcAddr == " + self.interface_ipv6 + " or ipv6.DstAddr == " + self.interface_ipv6 + ")"
-        #     ip_filter = ip6_filter
-        # if self.interface_ipv4 and self.interface_ipv6:
-        #     ip_filter = "(" + ip4_filter + " or " + ip6_filter + ")"
-        #
-        # self.filter = "tcp"
-        # if ip_filter:
-        #     self.filter += " and " + ip_filter
-        self.w: WinDivert = WinDivert(w_filter)
+    def __init__(self, queue_num: int = 0):
+        self.queue_num = queue_num
+        self.nfqueue = NetfilterQueue()
+        self.raw_sock = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_TCP)
+        self.raw_sock.setsockopt(socket.IPPROTO_IP, socket.IP_HDRINCL, 1)
 
     @abstractmethod
-    def inject(self, packet: Packet):
+    def inject(self, scapy_pkt, nfq_pkt):
         sys.exit("Not implemented")
 
+    def send_raw(self, scapy_pkt):
+        self.raw_sock.sendto(bytes(scapy_pkt), (scapy_pkt[IP].dst, 0))
+
+    def _callback(self, nfq_pkt):
+        scapy_pkt = IP(nfq_pkt.get_payload())
+        self.inject(scapy_pkt, nfq_pkt)
+
     def run(self):
-        with self.w:
-            while True:
-                packet = self.w.recv(65575)
-                self.inject(packet)
+        self.nfqueue.bind(self.queue_num, self._callback)
+        try:
+            self.nfqueue.run()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            self.nfqueue.unbind()
+            self.raw_sock.close()
